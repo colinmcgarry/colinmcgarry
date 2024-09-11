@@ -1,0 +1,734 @@
+---
+title: "STAT 5905 Project"
+author: "Colin McGarry"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup}
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(tidyverse)
+library(car)
+library(corrplot)
+library(ggridges)
+library(corrr)
+library(FactoMineR)
+```
+
+```{r reading in and joining}
+StandardStats <- read_csv("Standard2022.csv")
+AdvancedStats <- read_csv("Advanced2022.csv")
+BattedBallStats <- read_csv("BattedBall2022.csv")
+Statcast2022 <- read_csv("Statcast2022.csv")
+
+BaseballStats2022 <- inner_join(StandardStats, AdvancedStats, by = "Name")
+BaseballStats2022 <- inner_join(BaseballStats2022, BattedBallStats, by = "Name")
+BaseballStats2022 <- inner_join(BaseballStats2022, Statcast2022, by = "Name")
+```
+
+```{r mutate}
+BaseballStats2022 <- BaseballStats2022 %>% 
+    select(-c(NameASCII.x, NameASCII.y, NameASCII.x.x, NameASCII.y.y, PlayerId.y, PlayerId.x.x, PlayerId.y.y,
+              MLBAMID.y, MLBAMID.x.x, MLBAMID.y.y, Team.y, Team.x.x, Team.y.y, ERA.y, IP.y, ERA)) %>% 
+    rename(Team = Team.x, ERA = ERA.x, IP = IP.x, PlayerId = PlayerId.x, MLBAMID = MLBAMID.x, BABIP = BABIP.x)
+
+BaseballStats2022 <- BaseballStats2022 %>% 
+    mutate(Strike_pct = Strikes/Pitches)
+
+BaseballStats2022 <- BaseballStats2022 %>% 
+    mutate(Division = case_when(Team == "NYM" | Team =="ATL"|Team =="PHI"|Team =="WSN"|Team =="MIA" ~ "NL East",
+                                Team == "STL" | Team =="MIL"|Team =="CHC"|Team =="PIT"|Team =="CIN" ~ "NL Central",
+                                Team == "LAD" | Team =="SFG"|Team =="SDP"|Team =="COL"|Team =="ARI" ~ "NL West",
+                                Team == "NYY" | Team =="TOR"|Team =="TBR"|Team =="BAL"|Team =="BOS" ~ "AL East",
+                                Team == "KCR" | Team =="CHW"|Team =="CLE"|Team =="MIN"|Team =="DET" ~ "AL Central",
+                                Team == "HOU" | Team =="TEX"|Team =="SEA"|Team =="LAA"|Team =="OAK" ~ "AL West",))
+
+BaseballStats2022 <- BaseballStats2022 %>% 
+    mutate(Win_pct = W/(W+L))
+```
+
+```{r correlation matrix}
+#Variables I would consider for regression model:
+
+ModelStats <- BaseballStats2022 %>% 
+    summarize(Name, Team, ERA, GS, IP, `K/9`, `BB/9`, AVG, WHIP, FIP, `LD%`,
+              `GB%`, `FB%`, `Pull%`, `Hard%`, EV, LA, `Barrel%`, Strike_pct, Win_pct)
+
+ModelStats %>% 
+    select_if(is.numeric) %>% 
+    cor() %>% 
+    corrplot(method = , diag = F, type = "upper")
+```
+Variables that ERA could have a relationship with: IP, K/9, BB/9, AVG, WHIP, FIP, LD%, Hard%, EV, Barrel%, Strike_pct
+
+```{r smaller plots/relationships}
+# ERA and Wins
+ERA.Wins <- lm(ModelStats$ERA ~ BaseballStats2022$W)
+summary(ERA.Wins) #very small p-value, definitely a relationship
+
+ggplot(BaseballStats2022, aes(x = BaseballStats2022$W, y = ModelStats$ERA))+
+    geom_point()+
+    xlab("Wins")+
+    ylab("ERA")+
+    theme_bw()
+
+ggplot(BaseballStats2022, aes(x = ModelStats$ERA, y = BaseballStats2022$WHIP))+
+    geom_point()+
+    theme_bw()+
+    xlab("ERA")+
+    ylab("WHIP")
+
+ggplot(BaseballStats2022, aes(x = ModelStats$ERA, y =`FIP`))+
+    geom_point()+
+    theme_bw()+
+    xlab("ERA")+
+    ylab("FIP")+
+    geom_abline(intercept = 0, slope = 1)
+
+ggplot(BaseballStats2022, aes(x = ModelStats$ERA, y = BaseballStats2022$`Barrel%`))+
+    geom_point()+
+    theme_bw()
+
+ggplot(BaseballStats2022, aes(x = `GB%`, y = `FB%`))+
+    geom_point()+
+    theme_bw()
+
+ggplot(BaseballStats2022, aes(x =`FB%`, y = LA))+
+    geom_point()+
+    theme_bw()
+
+ggplot(BaseballStats2022, aes(x = `RS/9`, y = Win_pct))+
+    geom_point()+
+    theme_bw()
+
+RunSupportModel <- lm(BaseballStats2022$`RS/9` ~ BaseballStats2022$Win_pct)
+summary(RunSupportModel)
+
+ggplot(BaseballStats2022, aes(x = ERA, y = `E-F`))+
+    geom_point()+
+    theme_bw()
+
+BaseballStats2022 %>%
+    na.omit() %>% 
+    ggplot(aes(x = ERA, y = Division))+
+    geom_density_ridges(fill = "lightblue")+
+    theme_ridges()
+
+EFAnalysis <- BaseballStats2022 %>%
+    na.omit() %>%
+    group_by(Team) %>% 
+    mutate(TeamEF = mean(`E-F`))
+    
+ggplot(EFAnalysis, aes(x = reorder(Team, TeamEF), y = TeamEF, fill = TeamEF > 0))+
+    geom_bar(stat = "summary", show.legend = FALSE) +
+    ylab("Teamwide E-F")+
+    xlab("Team")+
+    theme_bw()+
+    theme(axis.text.x = element_text(angle = 90, vjust = -0.5))+
+    ggtitle("ERA - FIP Differential by Team")+
+    theme(plot.title = element_text(hjust = 0.5))
+
+
+ggplot(BaseballStats2022, aes(x = `GB%`, y = ERA))+
+    geom_point()+
+    theme_bw()+
+    xlab("Ground Ball Rate (%)")+
+    ylab("ERA")
+
+ERAGB <- lm(BaseballStats2022$ERA ~ BaseballStats2022$`GB%`)
+summary(ERAGB)
+```
+
+```{r full model and multicollinearity}
+FullModel <- ModelStats %>% 
+    lm(ERA ~ GS + IP + `K/9` + `BB/9`+AVG + WHIP + FIP + `LD%`+`GB%`+`Pull%`+`Hard%`+EV+LA+`Barrel%`+Strike_pct,.)
+summary(FullModel)
+
+#Shows which variables are significant
+
+vif(FullModel)
+
+
+```
+
+
+```{r one variable models}
+# show p-value, r^2 and adj r^2 for each
+onevar.gs <- lm(BaseballStats2022$ERA ~ BaseballStats2022$GS)
+summary(onevar.gs) # p: 0.0124, R = 0.0445, adj = 0.03758
+
+onevar.ip <- lm(BaseballStats2022$ERA ~ BaseballStats2022$IP)
+summary(onevar.ip) # p: 4.06e-7, R = 0.1703, adj = 0.1643
+
+onevar.k9 <- lm(BaseballStats2022$ERA ~ BaseballStats2022$`K/9`)
+summary(onevar.k9) # p: 3.19e-6, R = 0.146, adj = 0.1398
+
+onevar.bb9 <- lm(BaseballStats2022$ERA ~ BaseballStats2022$`BB/9`)
+summary(onevar.bb9) # p: 7.83e-9, R = 0.2152, adj = 0.2095
+
+onevar.avg <- lm(BaseballStats2022$ERA ~ BaseballStats2022$AVG)
+summary(onevar.avg) # p: <2e-16, R = 0.6191, adj = 0.6164
+
+onevar.whip <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP)
+summary(onevar.whip) # p: <2e-16, R = 0.7453, adj = 0.7435
+
+onevar.fip <- lm(BaseballStats2022$ERA ~ BaseballStats2022$FIP)
+summary(onevar.fip) # p: <2e-16, R = 0.6427, adj = 0.6401
+
+onevar.ld <- lm(BaseballStats2022$ERA ~ BaseballStats2022$`LD%`)
+summary(onevar.ld) # p: 3.88e-6, R = 0.1436, adj = 0.1374
+
+onevar.gb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$`GB%`)
+summary(onevar.gb) # p: 0.308, R = 0.007523, adj = 0.0003316
+
+onevar.fb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$`FB%`)
+summary(onevar.fb) # p: 0.702, R = 0.001067, adj = -0.006172
+
+onevar.pull <- lm(BaseballStats2022$ERA ~ BaseballStats2022$`Pull%`)
+summary(onevar.pull) # p: 0.09726, R = 0.0198, adj = 0.0127
+
+onevar.hardhit <- lm(BaseballStats2022$ERA ~ BaseballStats2022$`HardHit%`)
+summary(onevar.hardhit) # p: 4.14e-13, R = 0.3177, adj = 0.3128
+
+onevar.ev <- lm(BaseballStats2022$ERA ~ BaseballStats2022$EV)
+summary(onevar.ev) # p: 3.22e-9, R = 0.225, adj = 0.2194
+
+onevar.la <- lm(BaseballStats2022$ERA ~ BaseballStats2022$LA)
+summary(onevar.la) # p: 0.855, R = 0.0002444, adj = -0.007
+
+onevar.barrel <- lm(BaseballStats2022$ERA ~ BaseballStats2022$`Barrel%`)
+summary(onevar.barrel) # p: 5.73e-10, R = 0.2437, adj = 0.2382
+
+onevar.strikepct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$Strike_pct)
+summary(onevar.strikepct) # p: 1.53e-7, R = 0.1816, adj = 0.1756
+
+onevar.winpct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$Win_pct)
+summary(onevar.winpct) # p: <2e-16, R = 0.459, adj = 0.4551
+
+# Keep WHIP as first variable
+```
+
+
+
+```{r 2 variable models}
+#show p-value, R^2, and adj R^2 for each (started with <2e-16, 0.7454, 0.7435)
+
+twovar.gs <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$GS)
+summary(twovar.gs) # new p-value: 0.839, R = 0.7454, adj = 0.7417
+
+twovar.ip <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$IP)
+summary(twovar.ip) # new p-value: 0.25175, R = 0.7477, adj = 0.7441
+
+twovar.k9 <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$`K/9`)
+summary(twovar.k9) # new p-value: 0.991779, R = 0.7453, adj = 0.7416
+
+twovar.bb9 <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$`BB/9`)
+summary(twovar.bb9) # new p-value: 0.0247, R = 0.7546, adj = 0.751
+
+twovar.avg <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$AVG)
+summary(twovar.avg) # new p-value: 0.113, R = 0.75, adj = 0.7463
+
+twovar.fip <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP)
+summary(twovar.fip) # new p-value: 2.45e-11, R = 0.8163, adj = 0.8136
+
+twovar.ld <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$`LD%`)
+summary(twovar.ld) # new p-value: 0.784, R = 0.7455, adj = 0.7417
+
+twovar.gb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$`GB%`)
+summary(twovar.gb) # new p-value: 6.43e-6, R = 0.7806, adj = 0.7774
+
+twovar.fb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$`FB%`)
+summary(twovar.fb) # new p-value: 5.08e-6, R = 0.7813, adj = 0.7781
+
+twovar.pull <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$`Pull%`)
+summary(twovar.pull) # new p-value: 0.188, R = 0.7485, adj = 0.7449
+
+twovar.hardhit <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$`HardHit%`)
+summary(twovar.hardhit) # new p-value: 0.00417, R = 0.7602, adj = 0.7567
+
+twovar.ev <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$EV)
+summary(twovar.ev) # new p-value: 0.001438, R = 0.7636, adj = 0.7601
+
+twovar.la <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$LA)
+summary(twovar.la) # new p-value: 0.008476, R = 0.7769, adj = 0.7736
+
+twovar.barrel <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$`Barrel%`)
+summary(twovar.barrel) # new p-value: 1.22e-9, R = 0.8057, adj = 0.8028
+
+twovar.strikepct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$Strike_pct)
+summary(twovar.strikepct) # new p-value: 0.02542, R = 0.7545, adj = 0.7509
+
+twovar.winpct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$Win_pct)
+summary(twovar.winpct) # new p-value: 0.00602, R = 0.759, adj = 0.7555
+
+# Keep WHIP and FIP as first 2 variables
+```
+
+
+```{r 3 variable models}
+#show p-value, R^2, and adj R^2 for each (started with R = 0.8163, adj = 0.8136)
+
+threevar.gs <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$GS)
+summary(threevar.gs) # new p-value: 0.533, R = 0.8168, adj = 0.8127
+
+threevar.ip <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$IP)
+summary(threevar.ip) # new p-value: 0.587, R = 0.8167, adj = 0.8126
+
+threevar.k9 <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`K/9`)
+summary(threevar.k9) # new p-value: 0.00241, R = 0.8283, adj = 0.8245
+
+threevar.bb9 <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9`)
+summary(threevar.bb9) # new p-value: 0.000979, R = 0.8304, adj = 0.8267
+
+threevar.avg <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$AVG)
+summary(threevar.avg) # new p-value: 0.0106, R = .8249, adj = 0.821
+
+threevar.ld <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`LD%`)
+summary(threevar.ld) # new p-value: 0.00109, R = .8302, adj = 0.8264
+
+threevar.gb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`GB%`)
+summary(threevar.gb) # new p-value: 0.0133, R = .8244, adj = 0.8205
+
+threevar.fb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`FB%`)
+summary(threevar.fb) # new p-value: 0.0926, R = .8201, adj = 0.8161
+
+threevar.pull <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Pull%`)
+summary(threevar.pull) # new p-value: 0.516562, R = .8168, adj = 0.8128
+
+threevar.hardhit <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`HardHit%`)
+summary(threevar.hardhit) # new p-value: 0.0171, R = .8238, adj = 0.8199
+
+threevar.ev <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$EV)
+summary(threevar.ev) # new p-value: 0.003620, R = .8274, adj = 0.8236
+
+threevar.la<- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$LA)
+summary(threevar.la) # new p-value: 0.0424, R = .8218, adj = 0.8178
+
+threevar.barrel <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%`)
+summary(threevar.barrel) # new p-value: 0.000904, R = .8306, adj = 0.8269
+
+threevar.strikepct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$Strike_pct)
+summary(threevar.strikepct) # new p-value: 0.000948, R = .8305, adj = 0.8268
+
+threevar.winpct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$Win_pct)
+summary(threevar.winpct) # new p-value: 0.0308, R = .8225, adj = 0.8186
+
+# Keep WHIP, FIP, and Barrel% as first 3 variables
+```
+
+
+
+```{r 4 variable models}
+#started with R = 0.8306 and adj = 0.8269
+
+fourvar.gs <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$GS)
+summary(fourvar.gs) # new p-value: 0.66453, R = 0.8308, adj = 0.8258
+
+fourvar.ip <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$IP)
+summary(fourvar.ip) # new p-value: 0.505452, R = 0.8312, adj = 0.8262
+
+fourvar.k9 <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`K/9`)
+summary(fourvar.k9) # new p-value: 0.054, R = 0.8352, adj = 0.8303
+
+fourvar.bb9 <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9`)
+summary(fourvar.bb9) # new p-value: 0.00145, R = 0.8429, adj = 0.8382
+
+fourvar.avg <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$AVG)
+summary(fourvar.avg) # new p-value: 0.011144, R = 0.8385, adj = 0.8337
+
+fourvar.ld <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`LD%`)
+summary(fourvar.ld) # new p-value: 0.0041, R = 0.8407, adj = 0.8359
+
+fourvar.gb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`GB%`)
+summary(fourvar.gb) # new p-value: 0.2070, R = 0.8326, adj = 0.8276
+
+fourvar.fb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`FB%`)
+summary(fourvar.fb) # new p-value: 0.68545, R = 0.8308, adj = 0.8258
+
+fourvar.pull <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`Pull%`)
+summary(fourvar.pull) # new p-value: 0.66940, R = 0.8308, adj = 0.8258
+
+fourvar.hardhit <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`HardHit%`)
+summary(fourvar.hardhit) # new p-value: 0.11927, R = 0.8336, adj = 0.8287
+
+fourvar.ev <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$EV)
+summary(fourvar.ev) # new p-value: 0.0728, R = 0.8346, adj = 0.8297
+
+fourvar.la <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$LA)
+summary(fourvar.la) # new p-value: 0.36920, R = 0.8316, adj = 0.8266
+
+fourvar.strikepct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$Strike_pct)
+summary(fourvar.strikepct) # new p-value: 0.00801, R = 0.8392, adj = 0.8345
+
+fourvar.winpct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$Win_pct)
+summary(fourvar.winpct) # new p-value: 0.024582, R = 0.8369, adj = 0.832
+
+# Keep WHIP, FIP. Barrel%, and BB/9 as first 4 variables
+```
+
+
+```{r 5 variable models}
+#starting with R = 0.8429, adj = 0.8382
+
+fivevar.gs <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$GS)
+summary(fivevar.gs) # new p-value: 0.92185, R = 0.8429, adj = 0.8371
+
+fivevar.ip <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$IP)
+summary(fivevar.ip) # new p-value: 0.212104, R = 0.8447, adj = 0.8389
+
+fivevar.k9 <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9`)
+summary(fivevar.k9) # new p-value: 2.97e-7, R = 0.871, adj = 0.8371 *****Barrel% no longer significant (0.723)
+
+fivevar.avg <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG)
+summary(fivevar.avg) # new p-value: 0.002822, R = 0.8531, adj = 0.8476
+
+fivevar.ld <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$`LD%`)
+summary(fivevar.ld) # new p-value: 0.01112, R = 0.8503, adj = 0.8447
+
+fivevar.gb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$`GB%`)
+summary(fivevar.gb) # new p-value: 0.14647, R = 0.8454, adj = 0.8396
+
+fivevar.fb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$`FB%`)
+summary(fivevar.fb) # new p-value: 0.46409, R = 0.8435, adj = 0.8377
+
+fivevar.pull <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$`Pull%`)
+summary(fivevar.pull) # new p-value: 0.51777, R = 0.8434, adj = 0.8376
+
+fivevar.hardhit <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$`HardHit%`)
+summary(fivevar.hardhit) # new p-value: 0.074531, R = 0.8466, adj = 0.8409
+
+fivevar.ev <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$EV)
+summary(fivevar.ev) # new p-value: 0.025932, R = 0.8486, adj = 0.843
+
+fivevar.la <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$LA)
+summary(fivevar.la) # new p-value: 0.28025, R = 0.8443, adj = 0.8385
+
+fivevar.strikepct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$Strike_pct)
+summary(fivevar.strikepct) # new p-value: 0.56685, R = 0.8433, adj = 0.8374 ***** BB/9 no longer significant (.06480)
+
+fivevar.winpct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$Win_pct)
+summary(fivevar.winpct) # new p-value: 0.016840, R = 0.8495, adj = 0.8439
+
+# Keep WHIP, FIP, Barrel%, BB/9, and AVG as first 5 variables
+```
+
+
+```{r six variable models}
+# started with R = 0.8531, adj = 0.8476
+
+sixvar.gs <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$GS)
+summary(sixvar.gs) # not significant
+
+sixvar.ip <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$IP)
+summary(sixvar.ip) # not significant
+
+sixvar.k9 <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`K/9`)
+summary(sixvar.k9) # AVG and Barrel% not significant
+
+sixvar.ld <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`LD%`)
+summary(sixvar.ld) # new p-value: 0.01414, R = 0.8596, adj = 0.8532
+
+sixvar.gb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`GB%`)
+summary(sixvar.gb) # not significant
+
+sixvar.fb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`FB%`)
+summary(sixvar.fb) # not significant
+
+sixvar.pull <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`Pull%`)
+summary(sixvar.pull) # not significant
+
+sixvar.hardhit <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`HardHit%`)
+summary(sixvar.hardhit) # not significant
+
+sixvar.ev <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$EV)
+summary(sixvar.ev) # Barrel% no longer significant
+
+sixvar.la <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$LA)
+summary(sixvar.la) # not significant
+
+sixvar.strikepct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$Strike_pct)
+summary(sixvar.strikepct) # not significant
+
+sixvar.winpct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$Win_pct)
+summary(sixvar.winpct) # not significant
+
+# Keep LD% as 6th variable
+```
+
+```{r 7 variable models}
+# started with R = 0.8596, adj = 0.8532
+
+sevenvar.gs <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`LD%` + BaseballStats2022$GS)
+summary(sevenvar.gs) # not significant
+
+sevenvar.ip <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`LD%` + BaseballStats2022$IP)
+summary(sevenvar.ip) # not significant
+
+sevenvar.k9 <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`LD%` + BaseballStats2022$`K/9`)
+summary(sevenvar.k9) # Barrel% and AVG no longer significant
+
+sevenvar.gb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`LD%` + BaseballStats2022$`GB%`)
+summary(sevenvar.gb) # not significant
+
+sevenvar.fb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`LD%` + BaseballStats2022$`FB%`)
+summary(sevenvar.fb) # not significant
+
+sevenvar.pull <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`LD%` + BaseballStats2022$`Pull%`)
+summary(sevenvar.pull) # not significant
+
+sevenvar.hardhit <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`LD%` + BaseballStats2022$`HardHit%`)
+summary(sevenvar.hardhit) # not significant
+
+sevenvar.ev <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`LD%` + BaseballStats2022$EV)
+summary(sevenvar.ev) # not significant
+
+sevenvar.la <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`LD%` + BaseballStats2022$LA)
+summary(sevenvar.la) # not significant
+
+sevenvar.strikepct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`LD%` + BaseballStats2022$Strike_pct)
+summary(sevenvar.strikepct) # not significant
+
+sevenvar.winpct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`LD%` + BaseballStats2022$Win_pct)
+summary(sevenvar.winpct) # not significant
+
+#No models with 7 significant variables. (But whip/fip/bb9/k9 had a very high R^2 - will check)
+```
+
+
+```{r chose bb9 3rd?}
+# start with WHIP, FIP, BB/9, R = 0.8304, adj = 0.8267
+
+newfourvar.gs <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$GS)
+summary(newfourvar.gs) # new p-value: 0.78694, R = 0.8305, adj = 0.8255
+
+newfourvar.ip <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$IP)
+summary(newfourvar.ip) # new p-value: 0.25196, R = 0.8321, adj = 0.8271
+
+newfourvar.k9 <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9`)
+summary(newfourvar.k9) # new p-value: 1.43e-9, R = 0.8708, adj = 0.867
+
+newfourvar.avg <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$AVG)
+summary(newfourvar.avg) # new p-value: 0.78694, R = 0.8446, adj = 0.84
+
+newfourvar.ld <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`LD%`)
+summary(newfourvar.ld) # new p-value: 0.00359, R = 0.8408, adj = 0.8361
+
+newfourvar.gb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`GB%`)
+summary(newfourvar.gb) # new p-value: 0.009076, R = 0.8388, adj = 0.834
+
+newfourvar.fb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`FB%`)
+summary(newfourvar.fb) # new p-value: 0.051222, R = 0.8351, adj = 0.8303
+
+newfourvar.pull <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`Pull%`)
+summary(newfourvar.pull) # new p-value: 0.385673, R = 0.8314, adj = 0.8264
+
+newfourvar.hardhit <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`HardHit%`)
+summary(newfourvar.hardhit) # new p-value: 0.009939, R = 0.8386, adj = 0.8338
+
+newfourvar.ev <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$EV)
+summary(newfourvar.ev) # new p-value: 0.001030, R = 0.8435, adj = 0.8388
+
+newfourvar.la <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$LA)
+summary(newfourvar.la) # new p-value: 0.030502, R = 0.8362, adj = 0.8314
+
+newfourvar.barrel <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`Barrel%`)
+summary(newfourvar.barrel) # new p-value: 0.00134, R = 0.8429, adj = 0.8382
+
+newfourvar.strikepct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$Strike_pct)
+summary(newfourvar.strikepct) # new p-value: 0.1600, R = 0.8329, adj = 0.8279
+
+newfourvar.winpct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$Win_pct)
+summary(newfourvar.winpct) # new p-value: 0.021109, R = 0.8305, adj = 0.8255
+
+#keep WHIP FIP BB9 and K9 as first 4 variables
+```
+
+
+```{r new 5 var models}
+#start with WHIP, FIP, BB/9 and K/9, R = 0.8708, adj = 0.867
+
+newfivevar.gs <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$GS)
+summary(newfivevar.gs) # new p-value: 0.852, R = 0.8709, adj = 0.8661
+
+newfivevar.ip <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$IP)
+summary(newfivevar.ip) # new p-value: 0.275, R = 0.872, adj = 0.8672
+
+newfivevar.avg <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$AVG)
+summary(newfivevar.avg) # new p-value: 0.090780, R = 0.8736, adj = 0.8689
+
+newfivevar.ld <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%`)
+summary(newfivevar.ld) # new p-value: 0.00895, R = 0.8773, adj = 0.8727
+
+newfivevar.gb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`GB%`)
+summary(newfivevar.gb) # new p-value: 0.225, R = 0.8773, adj = 0.8727
+
+newfivevar.fb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`FB%`)
+summary(newfivevar.fb) # new p-value: 0.625, R = 0.8773, adj = 0.8727
+
+newfivevar.pull <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`Pull%`)
+summary(newfivevar.pull) # new p-value: 0.698, R = 0.8773, adj = 0.8727
+
+newfivevar.hardhit <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`HardHit%`)
+summary(newfivevar.hardhit) # new p-value: 0.105, R = 0.8773, adj = 0.8727
+
+newfivevar.ev <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$EV)
+summary(newfivevar.ev) # new p-value: 0.0228, R = 0.8758, adj = 0.8711
+
+newfivevar.la <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$LA)
+summary(newfivevar.la) # new p-value: 0.347, R = 0.8773, adj = 0.8727
+
+newfivevar.barrel <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`Barrel%`)
+summary(newfivevar.barrel) # new p-value: 0.723
+
+newfivevar.strikepct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$Strike_pct)
+summary(newfivevar.strikepct) # new p-value: 0.8861, R = 0.8773, adj = 0.8727
+
+newfivevar.winpct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$Win_pct)
+summary(newfivevar.winpct) # new p-value: 0.0491, R = 0.8745, adj = 0.8698
+
+# Keep whip, fip, bb9, k9, ld% as first 5
+```
+
+```{r new 6 variable models}
+#start with R = 0.8773, adj = 0.8727
+
+newsixvar.gs <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$GS)
+summary(newsixvar.gs) # new p-value: 0.80525, R = 0.8773, adj = 0.8727
+
+newsixvar.ip <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$IP)
+summary(newsixvar.ip) # new p-value: 0.3142
+
+newsixvar.avg <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$AVG)
+summary(newsixvar.avg) # new p-value: not significant
+
+newsixvar.gb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$`GB%`)
+summary(newsixvar.gb) # new p-value: not significant
+
+newsixvar.fb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$`FB%`)
+summary(newsixvar.fb) # new p-value: not significant
+
+newsixvar.pull <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$`Pull%`)
+summary(newsixvar.pull) # new p-value: not significant
+
+newsixvar.hardhit <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$`HardHit%`)
+summary(newsixvar.hardhit) # new p-value: not significant
+
+newsixvar.ev <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$EV)
+summary(newsixvar.ev) # new p-value: 0.0478
+
+newsixvar.la <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$LA)
+summary(newsixvar.la) # new p-value: not significant
+
+newsixvar.barrel <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$`Barrel%`)
+summary(newsixvar.barrel) # new p-value: not significant
+
+newsixvar.strikepct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$Strike_pct)
+summary(newsixvar.strikepct) # new p-value: not significant
+
+newsixvar.winpct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$Win_pct)
+summary(newsixvar.winpct) # new p-value: not significant
+
+
+# keep whip, fip, bb9, k9, ld% and EV
+# R = 0.8809, adj = 0.8755
+```
+
+
+```{r any seven variable models?}
+
+newsevenvar.gs <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$EV + BaseballStats2022$GS)
+summary(newsevenvar.gs) # new p-value: not significant
+
+newsevenvar.ip <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$EV + BaseballStats2022$IP)
+summary(newsevenvar.ip) # new p-value: not significant
+
+newsevenvar.avg <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$EV + BaseballStats2022$AVG)
+summary(newsevenvar.avg) # new p-value: not significant
+
+newsevenvar.gb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$EV + BaseballStats2022$`GB%`)
+summary(newsevenvar.gb) # new p-value: not significant
+
+newsevenvar.fb <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$EV + BaseballStats2022$`FB%`)
+summary(newsevenvar.fb) # new p-value: not significant
+
+newsevenvar.pull <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$EV + BaseballStats2022$`Pull%`)
+summary(newsevenvar.pull) # new p-value: not significant
+
+newsevenvar.hardhit <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$EV + BaseballStats2022$`HardHit%`)
+summary(newsevenvar.hardhit) # new p-value: not significant
+
+newsevenvar.la <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$EV + BaseballStats2022$LA)
+summary(newsevenvar.la) # new p-value: not significant
+
+newsevenvar.barrel <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$EV + BaseballStats2022$`Barrel%`)
+summary(newsevenvar.barrel) # new p-value: not significant
+
+newsevenvar.strikepct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$EV + BaseballStats2022$Strike_pct)
+summary(newsevenvar.strikepct) # new p-value: not significant
+
+newsevenvar.winpct <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$EV + BaseballStats2022$Win_pct)
+summary(newsevenvar.winpct) # new p-value: 0.04749, R = 0.8844, adj = 0.8782
+```
+
+```{r just testing if any eight var are significant}
+
+neweightvar.testing <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$EV + BaseballStats2022$Win_pct + BaseballStats2022$Strike_pct)
+summary(neweightvar.testing)
+
+# no 8-variable models have 8 significant variables
+
+```
+
+```{r final models}
+#Final Model #1 (WHIP, FIP, Barrel%, BB/9, AVG, LD%)
+
+finalmodel.one <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`Barrel%` + BaseballStats2022$`BB/9` + BaseballStats2022$AVG + BaseballStats2022$`LD%`)
+summary(finalmodel.one) # R = 0.8596, adj = 0.8532
+
+#Final Model #2 (WHIP, FIP, BB/9, K/9, LD%, EV, Win%)
+
+finalmodel.two <- lm(BaseballStats2022$ERA ~ BaseballStats2022$WHIP + BaseballStats2022$FIP + BaseballStats2022$`BB/9` + BaseballStats2022$`K/9` + BaseballStats2022$`LD%` + BaseballStats2022$EV + BaseballStats2022$Win_pct)
+summary(finalmodel.two) # R = 0.8844, adj = 0.8782
+```
+
+
+```{r residual plots}
+
+par(mfrow=c(1,2))
+plot(finalmodel.one,1,add.smooth=FALSE)
+plot(finalmodel.one,2)
+
+vif(finalmodel.one)
+
+par(mfrow=c(1,2))
+plot(finalmodel.two,1,add.smooth=FALSE)
+plot(finalmodel.two,2)
+
+vif(finalmodel.two)
+```
+
+
+```{r pca}
+numericaldata <- ModelStats %>% 
+    select_if(is.numeric)
+normalized_data <- scale(numericaldata)
+
+corr_matrix <- cor(normalized_data)
+
+data.pca <- princomp(corr_matrix)
+
+summary(data.pca)
+
+data.pca$loadings[,1:8]
+
+biplot(data.pca, expand = 20)
+```
+
+
+
+
+
+
